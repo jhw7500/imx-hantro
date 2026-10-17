@@ -109,6 +109,7 @@ typedef struct {
 	u32 is_valid; //indicate this core is hantro's core or not
 	u32 is_reserved; //indicate this core is occupied by user or not
 	int pid; //indicate which process is occupying the core
+	struct file *owner_filp; //open file holding the reservation; release is matched by it, not by thread id
 	u32 irq_received; //indicate this core receives irq
 	u32 irq_status;
 	char *buffer;
@@ -127,7 +128,7 @@ typedef struct {
 static int ReserveIO(void);
 static void ReleaseIO(void);
 static void ResetAsic(hantroenc_t *dev);
-static int CheckCoreOccupation(hantroenc_t *dev);
+static int CheckCoreOccupation(hantroenc_t *dev, struct file *filp);
 
 #ifdef hantroenc_DEBUG
 static void dump_regs(unsigned long data);
@@ -281,7 +282,7 @@ static int WaitEncReady(hantroenc_t *dev, u32 *core_info, u32 *irq_status)
 	return 0;
 }
 
-static int CheckCoreOccupation(hantroenc_t *dev)
+static int CheckCoreOccupation(hantroenc_t *dev, struct file *filp)
 {
 	int ret = 0;
 	unsigned long flags;
@@ -290,6 +291,7 @@ static int CheckCoreOccupation(hantroenc_t *dev)
 	if (!dev->is_reserved) {
 		dev->is_reserved = 1;
 		dev->pid = current->pid;
+		dev->owner_filp = filp;
 		ret = 1;
 		PDEBUG("%s pid=%d\n", __func__, dev->pid);
 	}
@@ -299,7 +301,7 @@ static int CheckCoreOccupation(hantroenc_t *dev)
 	return ret;
 }
 
-static int GetWorkableCore(hantroenc_t *dev, u32 *core_info, u32 *core_info_tmp)
+static int GetWorkableCore(hantroenc_t *dev, u32 *core_info, u32 *core_info_tmp, struct file *filp)
 {
 	int ret = 0;
 	u32 i = 0;
@@ -326,7 +328,7 @@ static int GetWorkableCore(hantroenc_t *dev, u32 *core_info, u32 *core_info_tmp)
 				if (i > total_core_num-1)
 					break;
 				core_id = i;
-				if (dev[core_id].is_valid && CheckCoreOccupation(&dev[core_id])) {
+				if (dev[core_id].is_valid && CheckCoreOccupation(&dev[core_id], filp)) {
 					*core_info_tmp = ((((*core_info_tmp & 0xF00) >> 8)-1)<<8)|(*core_info_tmp & 0x0FF);
 					*core_info_tmp = *core_info_tmp | (1<<core_id);
 					if (((*core_info_tmp & 0xF00) >> 8) == 0) {
@@ -348,7 +350,7 @@ static int GetWorkableCore(hantroenc_t *dev, u32 *core_info, u32 *core_info_tmp)
 	return ret;
 }
 
-static long ReserveEncoder(hantroenc_t *dev, u32 *core_info)
+static long ReserveEncoder(hantroenc_t *dev, u32 *core_info, struct file *filp)
 {
 	u32 core_info_tmp = 0;
 
@@ -359,13 +361,13 @@ static long ReserveEncoder(hantroenc_t *dev, u32 *core_info)
 	}
 
 	/* lock a core that has specified core id*/
-	if (wait_event_interruptible(hw_queue, GetWorkableCore(dev, core_info, &core_info_tmp) != 0))
+	if (wait_event_interruptible(hw_queue, GetWorkableCore(dev, core_info, &core_info_tmp, filp) != 0))
 		return -ERESTARTSYS;
 
 	return 0;
 }
 
-static void ReleaseEncoder(hantroenc_t *dev, u32 *core_info)
+static void ReleaseEncoder(hantroenc_t *dev, u32 *core_info, struct file *filp)
 {
 	unsigned long flags;
 	u32 core_num = 0;
@@ -383,13 +385,14 @@ static void ReleaseEncoder(hantroenc_t *dev, u32 *core_info)
 			core_id = i;
 			spin_lock_irqsave(&owner_lock, flags);
 			PDEBUG("dev[core_id].pid=%d,current->pid=%d\n", dev[core_id].pid, current->pid);
-			if (dev[core_id].is_reserved && dev[core_id].pid == current->pid) {
+			if (dev[core_id].is_reserved && dev[core_id].owner_filp == filp) {
 				dev[core_id].pid = -1;
+				dev[core_id].owner_filp = NULL;
 				dev[core_id].is_reserved = 0;
 				dev[core_id].irq_received = 0;
 				dev[core_id].irq_status = 0;
 				dev[core_id].reg_corrupt = 0;
-			} else if (dev[core_id].pid != current->pid)
+			} else if (dev[core_id].owner_filp != filp)
 				pr_err("WARNING:pid(%d) is trying to release core reserved by pid(%d)\n",
 					current->pid, dev[core_id].pid);
 
@@ -487,7 +490,7 @@ static long hantroenc_ioctl(struct file *filp,
 
 		PDEBUG("Reserve ENC Cores\n");
 		__get_user(core_info, (u32 *)arg);
-		ret = ReserveEncoder(hantroenc_data, &core_info);
+		ret = ReserveEncoder(hantroenc_data, &core_info, filp);
 		if (ret == 0)
 			__put_user(core_info, (u32 *) arg);
 		return ret;
@@ -499,7 +502,7 @@ static long hantroenc_ioctl(struct file *filp,
 
 		PDEBUG("Release ENC Core\n");
 
-		ReleaseEncoder(hantroenc_data, &core_info);
+		ReleaseEncoder(hantroenc_data, &core_info, filp);
 
 		break;
 	}
@@ -601,8 +604,9 @@ static int hantroenc_release(struct inode *inode, struct file *filp)
 
 	for (core_id = 0; core_id < total_core_num; core_id++) {
 		spin_lock_irqsave(&owner_lock, flags);
-		if (dev[core_id].is_reserved == 1 && dev[core_id].pid == current->pid) {
+		if (dev[core_id].is_reserved == 1 && dev[core_id].owner_filp == filp) {
 			dev[core_id].pid = -1;
+			dev[core_id].owner_filp = NULL;
 			dev[core_id].is_reserved = 0;
 			dev[core_id].irq_received = 0;
 			dev[core_id].irq_status = 0;
