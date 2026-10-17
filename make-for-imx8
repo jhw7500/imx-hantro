@@ -1,0 +1,44 @@
+#!/bin/bash
+# Yocto SDK 환경을 올리고 vc8000e 외부 모듈을 빌드한다. 인자는 make 에 그대로 넘긴다.
+#   ./make-for-imx8            빌드
+#   ./make-for-imx8 clean      산출물 정리
+# source 로 부르면 exit 가 호출한 셸을 죽인다. 실행이면 exit, source 면 return 한다.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _mfi_end='return'; else _mfi_end='exit'; fi
+_mfi_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 호스트별 경로는 저장소 루트의 `.env`(gitignore 대상)에서 읽는다. 이미 환경에 있는
+# 값이 우선이고, 없는 것만 파일에서 채운다. 파일이 임의 변수를 설정하지 못하도록 아는 키만 받는다.
+if [ -f "${_mfi_dir}/.env" ]; then
+    while IFS= read -r _mfi_line || [ -n "$_mfi_line" ]; do
+        case "$_mfi_line" in ''|'#'*) continue ;; esac
+        case "$_mfi_line" in *=*) ;; *) continue ;; esac
+        _mfi_k=${_mfi_line%%=*}
+        _mfi_v=${_mfi_line#*=}
+        case "$_mfi_k" in
+            SDK_LOC|SDK_NAME|KERNEL_SRC|KBUILD_OUTPUT) ;;
+            *) continue ;;
+        esac
+        [ -n "${!_mfi_k+set}" ] || [ -z "$_mfi_v" ] || printf -v "$_mfi_k" '%s' "$_mfi_v"
+    done < "${_mfi_dir}/.env"
+fi
+
+# KBUILD_OUTPUT 은 결합형 트리에서 비어 있는 게 정상이라 필수 목록에 없다.
+for _mfi_req in SDK_LOC SDK_NAME KERNEL_SRC; do
+    [ -n "${!_mfi_req:-}" ] && continue
+    echo "${_mfi_req} 가 비었다 — ${_mfi_dir}/.env 를 만들어 채운다 (cp .env.example .env)" >&2
+    "$_mfi_end" 1
+done
+
+[ -e "${SDK_LOC}/environment-setup-${SDK_NAME}" ] || {
+    echo "SDK 환경 파일이 없다: ${SDK_LOC}/environment-setup-${SDK_NAME}" >&2
+    "$_mfi_end" 1
+}
+
+# shellcheck disable=SC1090 # SDK setup path is selected at runtime.
+. "${SDK_LOC}/environment-setup-${SDK_NAME}"
+
+# 사용자 공간 LDFLAGS 가 커널 빌드에 섞이지 않게 한다.
+unset LDFLAGS
+
+make -C "$_mfi_dir" ARCH=arm64 CROSS_COMPILE=aarch64-poky-linux- \
+     KERNEL_SRC="${KERNEL_SRC}" KBUILD_OUTPUT="${KBUILD_OUTPUT:-}" "$@"

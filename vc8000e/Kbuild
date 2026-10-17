@@ -1,0 +1,3 @@
+# 외부 모듈 빌드 정의. 모듈 파일 이름을 커널 내장 드라이버(hx280enc_vc8000e)와 다르게 둔다.
+obj-m := hantro_vc8000e_ext.o
+hantro_vc8000e_ext-y := hx280enc_vc8000e.o
