@@ -1216,7 +1216,8 @@ MODULE_DEVICE_TABLE(of, hantro_vc8000e_of_match);
 
 static struct platform_driver mxchantro_vc8000e_driver = {
 	.driver = {
-	.name = "mxc_hantro_vc8000e",
+	/* external module: must differ from the built-in driver name so both can be registered */
+	.name = "mxc_hantro_vc8000e_ext",
 	.of_match_table = hantro_vc8000e_of_match,
 #ifdef CONFIG_PM
 	.pm = &hantro_vc8000e_pm_ops,
