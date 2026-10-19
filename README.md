@@ -22,6 +22,7 @@ NXP 의 사용자 공간 패키지 `imx-vpu-hantro` 와는 다르다. 사용자 
 |---|---|
 | `f5fc149` | 플랫폼 드라이버 이름을 `mxc_hantro_vc8000e_ext` 로 바꿨다. 내장 드라이버와 함께 등록돼야 하기 때문이다 |
 | `9af5230` | 코어 예약 소유를 스레드 id 가 아니라 열린 파일로 대조한다. 원본에서는 SIGKILL 뒤 예약이 영구히 남아 모든 인코딩이 멈췄다([pim-package-jhw#191](https://github.com/jhw7500/pim-package-jhw/issues/191)) |
+| `6b26f73` | 인코딩 완료 대기가 timeout 되면 세마포어를 푼다. upstream `LF-7711-7`(`9b03ccbcb27e`)을 그대로 가져왔다. 원본에서는 인터럽트를 한 번 놓치면 다음 인코딩 시작이 무기한 기다렸다([#1](https://github.com/jhw7500/imx-hantro/issues/1)) |
 
 ## 빌드와 배포
 
